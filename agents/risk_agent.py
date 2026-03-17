@@ -19,5 +19,8 @@ class RiskAgent:
             "news": news_report
         }
 
-        risk_collection.insert_one(assessment)
+        try:
+            risk_collection.insert_one(assessment)
+        except Exception as e:
+            print(f"⚠️  DB insert skipped (risk): {e}")
         return assessment

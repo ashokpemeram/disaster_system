@@ -29,6 +29,9 @@ class WeatherAgent:
             "raw_data": data
         }
 
-        result = weather_collection.insert_one(report)
-        report["_id"] = str(result.inserted_id)
+        try:
+            result = weather_collection.insert_one(report)
+            report["_id"] = str(result.inserted_id)
+        except Exception as e:
+            print(f"⚠️  DB insert skipped (weather): {e}")
         return report

@@ -29,5 +29,8 @@ class AlertAgent:
             "alert_message": alert_message
         }
 
-        alert_collection.insert_one(alert_doc)
+        try:
+            alert_collection.insert_one(alert_doc)
+        except Exception as e:
+            print(f"⚠️  DB insert skipped (alert): {e}")
         return alert_doc
