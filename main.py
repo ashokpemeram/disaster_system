@@ -120,7 +120,16 @@ def _match_or_create_area(lat: float, lon: float):
 
 @app.post("/assess")
 def assess(request: LocationRequest):
-    result = coordinator.handle_request(request.location)
+    lat, lon = None, None
+    try:
+        if "," in request.location:
+            parts = request.location.split(",")
+            lat = float(parts[0])
+            lon = float(parts[1])
+    except:
+        pass
+        
+    result = coordinator.handle_request(request.location, lat=lat, lon=lon)
     return serialize_mongo(result)
 
 

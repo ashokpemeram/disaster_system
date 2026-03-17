@@ -4,13 +4,15 @@ from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
 import math
+import sys
+import argparse
 
 load_dotenv()
 
 # Configuration
-MUMBAI_LAT = 19.0760
-MUMBAI_LON = 72.8777
-AREA_ID = "AREA-MUM-01"
+MUMBAI_LAT = 37.421998
+MUMBAI_LON = -122.084000
+AREA_ID = "AREA-20260317-MUM1"
 
 def generate_random_point(center_lat, center_lon, radius_m):
     """Generates a random lat/lon within a radius (meters) of a center point."""
@@ -28,28 +30,31 @@ def setup_scenario():
         client = MongoClient(os.getenv("MONGO_URI"))
         db = client["disaster_system"]
         
-        # 1. Clear existing disaster data
-        print("🧹 Clearing existing disaster data...")
-        db.sos_requests.delete_many({})
-        db.aid_requests.delete_many({})
-        db.disaster_areas.delete_many({})
+        # 1. Clear existing disaster data (DISABLED - preserving user data)
+        print("ℹ️ Preserving existing disaster data...")
+        # db.sos_requests.delete_many({})
+        # db.aid_requests.delete_many({})
+        # db.disaster_areas.delete_many({})
         db.weather_reports.delete_many({"location": "Mumbai"})
 
         # 2. Create Active Disaster Area
-        print(f"📍 Creating active area: {AREA_ID}")
-        db.disaster_areas.insert_one({
-            "id": AREA_ID,
-            "centerLat": MUMBAI_LAT,
-            "centerLon": MUMBAI_LON,
-            "redRadiusM": 1500.0,
-            "warningRadiusM": 3000.0,
-            "greenRadiusM": 4500.0,
-            "controllableRadiusM": 6000.0,
-            "createdAt": datetime.utcnow().isoformat(),
-            "isActive": True,
-            "type": "Coastal Flood",
-            "severity": "high"
-        })
+        if db.disaster_areas.find_one({"id": AREA_ID}):
+            print(f"📍 Area {AREA_ID} already exists. Skipping insertion.")
+        else:
+            print(f"📍 Creating active area: {AREA_ID}")
+            db.disaster_areas.insert_one({
+                "id": AREA_ID,
+                "centerLat": MUMBAI_LAT,
+                "centerLon": MUMBAI_LON,
+                "redRadiusM": 1500.0,
+                "warningRadiusM": 3000.0,
+                "greenRadiusM": 4500.0,
+                "controllableRadiusM": 6000.0,
+                "createdAt": datetime.utcnow().isoformat(),
+                "isActive": True,
+                "type": "Coastal Flood",
+                "severity": "high"
+            })
 
         # 3. Generate SOS Cluster (15 requests)
         print("🆘 Generating SOS requests...")
@@ -115,5 +120,28 @@ def setup_scenario():
     except Exception as e:
         print(f"❌ Error setting up scenario: {e}")
 
+def main():
+    parser = argparse.ArgumentParser(description="CERCA Disaster Simulation Facility")
+    parser.add_argument("--setup", action="store_true", help="Clear and setup a fresh disaster scenario")
+    parser.add_argument("--clear", action="store_true", help="Clear all simulated disaster data")
+    
+    args = parser.parse_args()
+    
+    if args.clear:
+        try:
+            client = MongoClient(os.getenv("MONGO_URI"))
+            db = client["disaster_system"]
+            print("🧹 Clearing all simulated disaster data...")
+            db.sos_requests.delete_many({})
+            db.aid_requests.delete_many({})
+            db.disaster_areas.delete_many({})
+            db.weather_reports.delete_many({"location": "Mumbai"})
+            print("✅ All clear!")
+        except Exception as e:
+            print(f"❌ Error clearing scenario: {e}")
+    else:
+        # Default behavior is to setup
+        setup_scenario()
+
 if __name__ == "__main__":
-    setup_scenario()
+    main()

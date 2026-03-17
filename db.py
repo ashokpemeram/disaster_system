@@ -46,11 +46,6 @@ weather_collection = _get_collection("weather_reports")
 news_collection = _get_collection("news_reports")
 risk_collection = _get_collection("risk_assessments")
 alert_collection = _get_collection("alerts")
-
-weather_collection = db["weather_reports"]
-news_collection = db["news_reports"]
-risk_collection = db["risk_assessments"]
-alert_collection = db["alerts"]
-aid_request_collection = db["aid_requests"]
-area_collection = db["disaster_areas"]
-sos_request_collection = db["sos_requests"]
+aid_request_collection = _get_collection("aid_requests")
+area_collection = _get_collection("disaster_areas")
+sos_request_collection = _get_collection("sos_requests")
