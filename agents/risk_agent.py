@@ -2,12 +2,8 @@ from db import risk_collection
 
 class RiskAgent:
 
-    def run(self, weather_report, news_report, simulation_area=None):
+    def run(self, weather_report, news_report):
         levels = [weather_report["risk_level"], news_report["risk_level"]]
-        
-        # Pull risk from simulation if exists
-        sim_risk = simulation_area.get("severity", "low") if simulation_area else "low"
-        levels.append(sim_risk)
 
         if "high" in levels:
             overall = "high"
@@ -20,9 +16,7 @@ class RiskAgent:
             "location": weather_report["location"],
             "overall_risk": overall,
             "weather": weather_report,
-            "news": news_report,
-            "simulated": simulation_area is not None,
-            "disaster_type": simulation_area.get("type") if simulation_area else None
+            "news": news_report
         }
 
         try:
