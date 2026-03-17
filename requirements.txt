@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+pymongo
+python-dotenv
+requests
+openai>=1.0.0,<2.0.0
+dnspython
