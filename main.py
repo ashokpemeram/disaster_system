@@ -13,13 +13,18 @@ from db import (
     sos_request_collection,
     weather_collection,
 )
-from utils import generate_area_id, haversine_distance_m, serialize_mongo
-
-_AREA_MATCH_DISTANCE_M = 2500.0
+from routers.admin import router as admin_router
+from routers.simulation import router as simulation_router
+from services.area_service import (
+    find_matching_area,
+    match_or_create_area,
+    normalize_area,
+    parse_location_coordinates,
+)
+from utils import serialize_mongo
 
 app = FastAPI()
 
-# Allow Flutter app (emulator/device/desktop) to reach this API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,6 +32,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(admin_router)
+app.include_router(simulation_router)
 
 coordinator = CoordinatorAgent()
 weather_agent = WeatherAgent()
@@ -34,13 +41,17 @@ weather_agent = WeatherAgent()
 
 class LocationRequest(BaseModel):
     location: str
+    simulate: bool = False
+    scenario: Optional[str] = None
+    areaId: Optional[str] = None
 
 
 class AidRequestPayload(BaseModel):
     id: Optional[str] = None
     priority: str = "medium"
     status: str = "pending"
-    requesterName: str = "Citizen"
+    requesterName: Optional[str] = None
+    phoneNumber: Optional[str] = None
     resources: List[str]
     peopleCount: int
     location: str
@@ -68,59 +79,27 @@ class SosRequestPayload(BaseModel):
     disasterId: Optional[str] = None
 
 
-def _get_active_areas():
-    return list(area_collection.find({"isActive": True}))
+def _resolve_assessment_area_id(location: str, area_id: Optional[str]) -> Optional[str]:
+    if area_id:
+        return area_id
 
+    lat, lon = parse_location_coordinates(location)
+    if lat is None or lon is None:
+        return None
 
-def _create_area_for_point(lat: float, lon: float):
-    existing_ids = set(
-        a.get("id") for a in area_collection.find({}, {"id": 1}) if a.get("id")
-    )
-    area_id = generate_area_id(existing_ids)
-    now = datetime.utcnow().isoformat()
-    area = {
-        "id": area_id,
-        "centerLat": lat,
-        "centerLon": lon,
-        "redRadiusM": 300.0,
-        "warningRadiusM": 600.0,
-        "greenRadiusM": 900.0,
-        "controllableRadiusM": 1200.0,
-        "createdAt": now,
-        "isActive": True,
-    }
-    area_collection.insert_one(area)
-    return area
-
-
-def _match_or_create_area(lat: float, lon: float):
-    areas = _get_active_areas()
-    if not areas:
-        created = _create_area_for_point(lat, lon)
-        return created["id"], True
-
-    nearest = None
-    nearest_distance = float("inf")
-    for area in areas:
-        dist = haversine_distance_m(lat, lon, area["centerLat"], area["centerLon"])
-        if dist < nearest_distance:
-            nearest_distance = dist
-            nearest = area
-
-    resolved = nearest or areas[0]
-    inside = nearest_distance <= resolved.get("controllableRadiusM", 0.0)
-
-    match_distance = resolved.get("controllableRadiusM", 0.0) or _AREA_MATCH_DISTANCE_M
-    if nearest_distance <= match_distance:
-        return resolved["id"], inside
-
-    created = _create_area_for_point(lat, lon)
-    return created["id"], True
+    matched_area, _inside, _distance = find_matching_area(lat, lon)
+    return matched_area["id"] if matched_area is not None else None
 
 
 @app.post("/assess")
 def assess(request: LocationRequest):
-    result = coordinator.handle_request(request.location)
+    resolved_area_id = _resolve_assessment_area_id(request.location, request.areaId)
+    result = coordinator.handle_request(
+        request.location,
+        simulate=request.simulate,
+        scenario=request.scenario,
+        area_id=resolved_area_id,
+    )
     return serialize_mongo(result)
 
 
@@ -130,18 +109,9 @@ def get_live_weather(
     lat: float = Query(None, description="Latitude coordinate"),
     lon: float = Query(None, description="Longitude coordinate"),
 ):
-    """
-    Get live weather readings for a specific area.
-    Accepts coordinates or location name, fetches current weather data,
-    stores it in MongoDB, and returns sensor readings.
-    """
     try:
-        if lat is not None and lon is not None:
-            location = f"{lat},{lon}"
-        else:
-            location = area_id
-
-        weather_report = weather_agent.run(location)
+        location = f"{lat},{lon}" if lat is not None and lon is not None else area_id
+        weather_report = weather_agent.run(location, area_id=area_id)
 
         if not weather_report or "raw_data" not in weather_report:
             return {
@@ -155,7 +125,9 @@ def get_live_weather(
             {
                 "$set": {
                     "location": area_id,
-                    "coordinates": {"lat": lat, "lon": lon} if lat and lon else None,
+                    "coordinates": {"lat": lat, "lon": lon}
+                    if lat is not None and lon is not None
+                    else None,
                     "raw_data": weather_report.get("raw_data"),
                     "risk_level": weather_report.get("risk_level", "low"),
                     "indicators": weather_report.get("indicators", []),
@@ -224,8 +196,12 @@ def create_aid_request(payload: AidRequestPayload):
         data["id"] = f"AID-{int(datetime.utcnow().timestamp() * 1000)}"
     if not data.get("timestamp"):
         data["timestamp"] = datetime.utcnow().isoformat()
+    requester_name = (data.get("requesterName") or "").strip()
+    phone_number = (data.get("phoneNumber") or "").strip()
+    data["requesterName"] = requester_name or "Citizen"
+    data["phoneNumber"] = phone_number or None
 
-    area_id, inside = _match_or_create_area(data["latitude"], data["longitude"])
+    area_id, inside = match_or_create_area(data["latitude"], data["longitude"])
     data["areaId"] = area_id
     data["insideControllableZone"] = inside
 
@@ -242,7 +218,7 @@ def create_sos_request(payload: SosRequestPayload):
     if not data.get("timestamp"):
         data["timestamp"] = datetime.utcnow().isoformat()
 
-    area_id, inside = _match_or_create_area(data["latitude"], data["longitude"])
+    area_id, inside = match_or_create_area(data["latitude"], data["longitude"])
     data["areaId"] = area_id
     data["insideControllableZone"] = inside
 
@@ -273,7 +249,20 @@ def list_sos_requests(area_id: Optional[str] = None):
 
 @app.get("/areas")
 def list_active_areas(active: bool = True):
-    query = {"isActive": True} if active else {}
+    query = (
+        {
+            "$or": [
+                {"isActive": True},
+                {"isActive": {"$exists": False}, "closedAt": None},
+            ]
+        }
+        if active
+        else {}
+    )
     records = list(area_collection.find(query).sort("createdAt", -1))
-    return serialize_mongo(records)
-
+    normalized_records = [
+        normalized
+        for normalized in (normalize_area(area) for area in records)
+        if normalized is not None
+    ]
+    return serialize_mongo(normalized_records)

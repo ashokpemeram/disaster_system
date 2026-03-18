@@ -1,7 +1,7 @@
 from db import risk_collection
 
-class RiskAgent:
 
+class RiskAgent:
     def run(self, weather_report, news_report):
         levels = [weather_report["risk_level"], news_report["risk_level"]]
 
@@ -14,13 +14,14 @@ class RiskAgent:
 
         assessment = {
             "location": weather_report["location"],
+            "areaId": weather_report.get("areaId"),
             "overall_risk": overall,
             "weather": weather_report,
-            "news": news_report
+            "news": news_report,
         }
 
         try:
             risk_collection.insert_one(assessment)
         except Exception as e:
-            print(f"⚠️  DB insert skipped (risk): {e}")
+            print(f"DB insert skipped (risk): {e}")
         return assessment

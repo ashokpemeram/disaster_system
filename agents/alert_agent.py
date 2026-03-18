@@ -1,46 +1,94 @@
-from db import alert_collection
-from openai import OpenAI
+from datetime import datetime, timedelta
 import os
+
+from openai import OpenAI
+
+from db import alert_collection
 from tools.sms_tool import send_sms
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENAI_API_KEY"),
+)
+
 
 class AlertAgent:
-
     def run(self, risk_assessment):
         if risk_assessment["overall_risk"] == "low":
             return {"message": "No alert needed"}
 
-        prompt = f"""
-        Generate a short, urgent public disaster alert message for:
-        {risk_assessment}
-        Keep it under 160 characters for SMS compatibility.
-        """
+        area_id = risk_assessment.get("areaId")
+        location = risk_assessment.get("location", "Unknown")
+        dedupe_query = {"area_id": area_id} if area_id else {"location": location}
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
+        try:
+            last_alert = alert_collection.find_one(
+                dedupe_query,
+                sort=[("timestamp", -1)],
+            )
+        except Exception as e:
+            last_alert = None
+            print(f"DB lookup failed (alert dedupe): {e}")
+
+        if last_alert:
+            last_time = last_alert.get("timestamp")
+            if (
+                last_alert.get("risk_level") == risk_assessment["overall_risk"]
+                and last_time
+                and (datetime.utcnow() - last_time) < timedelta(minutes=5)
+            ):
+                print(
+                    f"Recent alert already exists for {location}. Skipping duplicate alert and SMS."
+                )
+                return last_alert
+
+        alert_message = (
+            "Urgent: Disaster risk detected in your area. Please stay tuned for updates."
         )
 
-        alert_message = response.choices[0].message.content
-        print("Alert Agent:", alert_message)
+        try:
+            prompt = f"""
+            Generate a short, urgent public disaster alert message for:
+            {risk_assessment}
+            Keep it under 160 characters for SMS compatibility.
+            """
 
-        # Send SMS if risk is high
-        if risk_assessment["overall_risk"] == "high":
-            recipient = os.getenv("RECIPIENT_PHONE_NUMBER")
-            if recipient:
+            response = client.chat.completions.create(
+                model="openai/gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                extra_headers={
+                    "HTTP-Referer": "https://cerca-app.com",
+                    "X-Title": "CERCA Disaster System",
+                },
+            )
+
+            alert_message = response.choices[0].message.content
+            print("Alert Agent (AI):", alert_message)
+        except Exception as e:
+            print(f"AI alert generation failed: {e}. Using fallback message.")
+
+        recipient = os.getenv("RECIPIENT_PHONE_NUMBER")
+        if recipient:
+            try:
                 send_sms(recipient, alert_message)
-            else:
-                print("⚠️  RECIPIENT_PHONE_NUMBER missing. Skipping SMS.")
+            except Exception as sms_error:
+                print(f"SMS delivery failed: {sms_error}")
+        else:
+            print("RECIPIENT_PHONE_NUMBER missing. Skipping SMS.")
 
         alert_doc = {
-            "location": risk_assessment["location"],
+            "location": location,
+            "area_id": area_id,
             "risk_level": risk_assessment["overall_risk"],
-            "alert_message": alert_message
+            "alert_message": alert_message,
+            "timestamp": datetime.utcnow(),
+            "risk": risk_assessment,
         }
 
         try:
             alert_collection.insert_one(alert_doc)
+            print(f"Alert stored for {alert_doc['location']}.")
         except Exception as e:
-            print(f"⚠️  DB insert skipped (alert): {e}")
+            print(f"DB operation failed (alert): {e}")
+
         return alert_doc
