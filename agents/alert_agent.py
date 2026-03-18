@@ -40,6 +40,14 @@ class AlertAgent:
                 print(
                     f"Recent alert already exists for {location}. Skipping duplicate alert and SMS."
                 )
+                last_alert.setdefault(
+                    "sms_status",
+                    {
+                        "status": "skipped",
+                        "detail": "A matching alert already exists within the 5-minute dedupe window.",
+                        "recipient": os.getenv("RECIPIENT_PHONE_NUMBER"),
+                    },
+                )
                 return last_alert
 
         alert_message = (
@@ -68,19 +76,40 @@ class AlertAgent:
             print(f"AI alert generation failed: {e}. Using fallback message.")
 
         recipient = os.getenv("RECIPIENT_PHONE_NUMBER")
+        sms_status = {
+            "status": "not_attempted",
+            "detail": "SMS was not attempted.",
+            "recipient": recipient,
+        }
         if recipient:
             try:
                 send_sms(recipient, alert_message)
+                sms_status = {
+                    "status": "sent",
+                    "detail": f"SMS alert sent successfully to {recipient}.",
+                    "recipient": recipient,
+                }
             except Exception as sms_error:
                 print(f"SMS delivery failed: {sms_error}")
+                sms_status = {
+                    "status": "failed",
+                    "detail": f"SMS delivery failed: {sms_error}",
+                    "recipient": recipient,
+                }
         else:
             print("RECIPIENT_PHONE_NUMBER missing. Skipping SMS.")
+            sms_status = {
+                "status": "skipped",
+                "detail": "RECIPIENT_PHONE_NUMBER is not configured. SMS was skipped.",
+                "recipient": None,
+            }
 
         alert_doc = {
             "location": location,
             "area_id": area_id,
             "risk_level": risk_assessment["overall_risk"],
             "alert_message": alert_message,
+            "sms_status": sms_status,
             "timestamp": datetime.utcnow(),
             "risk": risk_assessment,
         }
