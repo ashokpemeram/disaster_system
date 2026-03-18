@@ -246,6 +246,7 @@ def test_simulation_start_live_weather_assess_and_stop(monkeypatch):
     start_body = start_response.json()
     assert start_body["session"]["isActive"] is True
     assert start_body["assessment"]["risk"]["overall_risk"] == "high"
+    assert start_body["assessment"]["sms_status"]["status"] == "sent"
     assert start_body["area"]["redRadiusM"] == 1800
     assert len(backend.collections["simulation_collection"].docs) == 1
     assert len(backend.sms_calls) == 1
